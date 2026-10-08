@@ -433,25 +433,22 @@ function Export-RowsToExcel {
             $excel.Quit()
         }
 
-        foreach (
-            $obj in @(
-                $usedRange,
-                $timestampRange,
-                $dataRange,
-                $headerRange,
-                $worksheet,
-                $workbook,
-                $excel
-            )
-       if ($null -ne $obj) {
-                [void][Runtime.InteropServices.Marshal]::ReleaseComObject(
-                    $obj
-                )
+        foreach ($obj in @(
+            $usedRange,
+            $timestampRange,
+            $dataRange,
+            $headerRange,
+            $worksheet,
+            $workbook,
+            $excel
+        )) {
+            if ($null -ne $obj) {
+                [void][Runtime.InteropServices.Marshal]::ReleaseComObject($obj)
             }
         }
 
-        [GC]::
-        [GC]::
+        [GC]::Collect()
+        [GC]::WaitForPendingFinalizers()
     }
 }
 
