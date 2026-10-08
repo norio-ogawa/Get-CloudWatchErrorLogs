@@ -8,6 +8,8 @@ The script runs a CloudWatch Logs Insights query for each search pattern and exp
 
 Before running the script, update the configuration variables at the beginning of `Get-HMSCloudWatchErrorLogs.ps1`.
 
+Example:
+
 ```powershell
 $AwsProfile = 'your-aws-profile'
 $AwsRegion = 'ap-northeast-1'
@@ -29,21 +31,33 @@ Set the values for your environment:
 
 Make sure that `$LogGroup` points to the correct environment, such as DEV or PROD.
 
-## Run
-
-Open PowerShell and run:
-
-```powershell
-.\Get-HMSCloudWatchErrorLogs.ps1
-```
-
-Enter the start and end date/time when prompted.
-
-The script searches CloudWatch Logs for each error pattern and creates an Excel file containing the results.
-
 ## Requirements
 
-- AWS CLI is installed.
-- The AWS CLI profile is configured.
-- The AWS profile has permission to read CloudWatch Logs.
-- `_template.xlsx` is in the same folder as the PowerShell script.
+Before running the script:
+
+- AWS CLI must be installed.
+- The AWS CLI profile must be configured.
+- The AWS profile must have permission to read CloudWatch Logs.
+- Microsoft Excel must be installed.
+- `_template.xlsx` must be placed in the same directory as `Get-HMSCloudWatchErrorLogs.ps1`.
+
+Example:
+
+```text
+Get-HMSCloudWatchErrorLogs.ps1
+_template.xlsx
+```
+
+The script copies `_template.xlsx` and uses the copy to create the output Excel file.
+
+## Run
+
+Open PowerShell and specify the start and end date/time.
+
+Example:
+
+```powershell
+.\Get-HMSCloudWatchErrorLogs.ps1 -StartDateTime "2026/10/02 00:00:00" -EndDateTime "2026/10/03 00:00:00"
+```
+
+The script searches CloudWatch Logs for each error pattern and creates an Excel file containing the results.
