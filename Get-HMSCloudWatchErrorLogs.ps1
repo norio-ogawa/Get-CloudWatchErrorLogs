@@ -305,13 +305,19 @@ function Export-RowsToExcel {
     $worksheet = $null
     $headerRange = $null
     $dataRange = $null
+    $timestampRange = $null
     $usedRange = $null
 
     try {
         $excel = New-Object -ComObject Excel.Application
         $excel.Visible = $false
         $excel.DisplayAlerts = $false
-        $workbook = $excel.Workbooks.Open($absolutePath, 0, $false)
+
+        $workbook = $excel.Workbooks.Open(
+            $absolutePath,
+            0,
+            $false
+        )
 
         if ($workbook.ReadOnly) {
             throw 'テンプレートのコピーが読み取り専用で開かれました。'
@@ -321,7 +327,11 @@ function Export-RowsToExcel {
         $worksheet.Name = 'CloudWatch Logs'
         $worksheet.Cells.Clear()
 
+        # シート全体の背景色を白色に設定します。
+        $worksheet.Cells.Interior.Color = 16777215
+
         $headerValues = New-Object 'object[,]' 1, $columns.Count
+
         for ($c = 0; $c -lt $columns.Count; $c++) {
             $headerValues[0, $c] = $columns[$c]
         }
@@ -330,8 +340,10 @@ function Export-RowsToExcel {
             $worksheet.Cells.Item(1, 1),
             $worksheet.Cells.Item(1, $columns.Count)
         )
+
         $headerRange.Value2 = $headerValues
         $headerRange.Font.Bold = $true
+        $headerRange.Interior.Color = 16777215
         $headerRange.AutoFilter() | Out-Null
 
         if ($Rows.Count -gt 0) {
@@ -339,12 +351,38 @@ function Export-RowsToExcel {
 
             for ($r = 0; $r -lt $Rows.Count; $r++) {
                 for ($c = 0; $c -lt $columns.Count; $c++) {
-                    $property = $Rows[$r].PSObject.Properties[$columns[$c]]
-                    $dataValues[$r, $c] = if ($null -ne $property -and $null -ne $property.Value) {
-                        [string]$property.Value
+                    $columnName = $columns[$c]
+                    $property = $Rows[$r].PSObject.Properties[$columnName]
+
+                    if ($null -eq $property -or $null -eq $property.Value) {
+                        $dataValues[$r, $c] = ''
+                        continue
+                    }
+
+                    # B列の@timestampをExcelの日付値として設定します。
+                    if ($columnName -eq '@timestamp') {
+                        $timestampText = [string]$property.Value
+                        $timestampValue = [DateTimeOffset]::MinValue
+
+                        if (
+                            [DateTimeOffset]::TryParse(
+                                $timestampText,
+                                [Globalization.CultureInfo]::InvariantCulture,
+                                [Globalization.DateTimeStyles]::AllowWhiteSpaces,
+                                [ref]$timestampValue
+                            )
+                        ) {
+                            # UTCなどのオフセット付き日時はローカル時刻に変換します。
+                            $dataValues[$r, $c] =
+                                $timestampValue.LocalDateTime.ToOADate()
+                        }
+                        else {
+                            # 解析できない場合は元の文字列をそのまま保存します。
+                            $dataValues[$r, $c] = $timestampText
+                        }
                     }
                     else {
-                        ''
+                        $dataValues[$r, $c] = [string]$property.Value
                     }
                 }
             }
@@ -353,32 +391,67 @@ function Export-RowsToExcel {
                 $worksheet.Cells.Item(2, 1),
                 $worksheet.Cells.Item($Rows.Count + 1, $columns.Count)
             )
+
             $dataRange.Value2 = $dataValues
+            $dataRange.Interior.Color = 16777215
+
+            # B列の表示形式を yyyy/mm/dd hh:mm:ss に設定します。
+            $timestampRange = $worksheet.Range(
+                $worksheet.Cells.Item(2, 2),
+                $worksheet.Cells.Item($Rows.Count + 1, 2)
+            )
+
+            $timestampRange.NumberFormat = 'yyyy/mm/dd hh:mm:ss'
         }
 
         $usedRange = $worksheet.UsedRange
+        $usedRange.Interior.Color = 16777215
         $usedRange.EntireColumn.AutoFit() | Out-Null
+
+        # @message列
         $worksheet.Columns.Item(8).ColumnWidth = 100
         $worksheet.Columns.Item(8).WrapText = $true
+
+        # シートを表示し、先頭行を固定します。
         $worksheet.Activate()
         $excel.ActiveWindow.SplitRow = 1
         $excel.ActiveWindow.FreezePanes = $true
 
-        # コピー済みテンプレートを上書き保存し、秘密度ラベルを維持します。
+        # Excelのグリッド線を非表示にします。
+        $excel.ActiveWindow.DisplayGridlines = $false
+
+        # コピー済みテンプレートを上書き保存し、
+        # 秘密度ラベルを維持します。
         $workbook.Save()
     }
     finally {
-        if ($workbook) { $workbook.Close($false) }
-        if ($excel) { $excel.Quit() }
+        if ($workbook) {
+            $workbook.Close($false)
+        }
 
-        foreach ($obj in @($usedRange, $dataRange, $headerRange, $worksheet, $workbook, $excel)) {
-            if ($null -ne $obj) {
-                [void][Runtime.InteropServices.Marshal]::ReleaseComObject($obj)
+        if ($excel) {
+            $excel.Quit()
+        }
+
+        foreach (
+            $obj in @(
+                $usedRange,
+                $timestampRange,
+                $dataRange,
+                $headerRange,
+                $worksheet,
+                $workbook,
+                $excel
+            )
+       if ($null -ne $obj) {
+                [void][Runtime.InteropServices.Marshal]::ReleaseComObject(
+                    $obj
+                )
             }
         }
 
-        [GC]::Collect()
-        [GC]::WaitForPendingFinalizers()
+        [GC]::
+        [GC]::
     }
 }
 
