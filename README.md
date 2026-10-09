@@ -80,3 +80,6 @@ Example:
 ```
 
 The script searches CloudWatch Logs for each error pattern and creates an Excel file containing the results.
+
+![Excel File](images/results.png)
+
