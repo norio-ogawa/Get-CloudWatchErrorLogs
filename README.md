@@ -36,6 +36,7 @@ Make sure that `$LogGroup` points to the correct environment, such as DEV or PRO
 Before running the script:
 
 - AWS CLI must be installed.
+- AWS CLI authentication must be completed, and a valid access token must be available.
 - The AWS CLI profile must be configured.
 - The AWS profile must have permission to read CloudWatch Logs.
 - Microsoft Excel must be installed.
