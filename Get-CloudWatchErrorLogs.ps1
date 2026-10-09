@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
-    AWS CloudWatch Logs InsightsからHMS環境の既知エラーログを抽出します。
+    Extracts logs that match known error patterns from AWS CloudWatch Logs Insights.
 .DESCRIPTION
-    開始日時と終了日時のみを指定します。
-    エラーパターンごとに検索し、結果を統合します。
-    複数パターンに一致するログは、最も長いパターンを優先します。
-    結果をJSONと、ラベル付き_template.xlsxを基にしたExcelへ出力します。
+    Specify only the start and end date/time.
+    Searches each error pattern and combines the results.
+    For logs that match multiple patterns, the longest pattern takes priority.
+    Outputs the results as JSON and as an Excel file based on the labeled _template.xlsx.
 .EXAMPLE
-    .\Get-HMSCloudWatchErrorLogs.ps1 -StartDateTime "2026-10-01 09:00" -EndDateTime "2026-10-01 10:00"
+    .\Get-CloudWatchErrorLogs.ps1 -StartDateTime "2026-10-01 09:00" -EndDateTime "2026-10-01 10:00"
 #>
 [CmdletBinding()]
 param(
@@ -79,7 +79,7 @@ function Convert-ToJstDateTimeOffset {
         $parsed = Get-Date $Text
     }
     catch {
-        throw "$ParameterName の形式が正しくありません。例: 2026-10-01 09:00"
+        throw "$ParameterName has an invalid format. Example: 2026-10-01 09:00"
     }
 
     [DateTimeOffset]::new(
@@ -99,13 +99,13 @@ function Invoke-AwsCliJson {
     $output = & aws @Arguments 2>&1
 
     if ($LASTEXITCODE -ne 0) {
-        throw "AWS CLIの実行に失敗しました。`n$(($output | Out-String).Trim())"
+        throw "AWS CLI command failed.`n$(($output | Out-String).Trim())"
     }
 
     $text = ($output | Out-String).Trim()
 
     if ([string]::IsNullOrWhiteSpace($text)) {
-        throw 'AWS CLIから応答が返りませんでした。'
+        throw 'AWS CLI returned no response.'
     }
 
     $text | ConvertFrom-Json
@@ -149,7 +149,7 @@ function Convert-CloudWatchRows {
             ) -join ([char]0x1F)
         }
 
-        # 長いパターンから検索するため、既に登録済みなら短いパターン側では追加しません。
+        # Patterns are searched from longest to shortest, so an existing event is not added again for a shorter pattern.
         if (-not $SeenEventKeys.Add($eventKey)) {
             continue
         }
@@ -195,7 +195,7 @@ function Invoke-CloudWatchPatternQuery {
     $queryId = [string]$startResponse.queryId
 
     if ([string]::IsNullOrWhiteSpace($queryId)) {
-        throw "Query IDを取得できませんでした。Pattern: $Pattern"
+        throw "Could not get the query ID. Pattern: $Pattern"
     }
 
     $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
@@ -216,13 +216,13 @@ function Invoke-CloudWatchPatternQuery {
         $status = [string]$queryResponse.status
 
         if ((Get-Date) -gt $deadline) {
-            throw "検索が${TimeoutMinutes}分以内に完了しませんでした。Pattern: $Pattern"
+            throw "The query did not complete within ${TimeoutMinutes} minutes. Pattern: $Pattern"
         }
     }
     while ($status -in @('Scheduled', 'Running', 'Unknown'))
 
     if ($status -ne 'Complete') {
-        throw "検索が正常完了しませんでした。Pattern: $Pattern / Status: $status"
+        throw "The query did not complete successfully. Pattern: $Pattern / Status: $status"
     }
 
     $statistics = $queryResponse.statistics
@@ -294,7 +294,7 @@ function Export-RowsToExcel {
     $templateFile = Join-Path $PSScriptRoot '_template.xlsx'
 
     if (-not (Test-Path -LiteralPath $templateFile)) {
-        throw "_template.xlsx が見つかりません: $templateFile"
+        throw "_template.xlsx was not found: $templateFile"
     }
 
     Copy-Item -LiteralPath $templateFile -Destination $Path -Force
@@ -320,14 +320,14 @@ function Export-RowsToExcel {
         )
 
         if ($workbook.ReadOnly) {
-            throw 'テンプレートのコピーが読み取り専用で開かれました。'
+            throw 'The copied template was opened as read-only.'
         }
 
         $worksheet = $workbook.Worksheets.Item(1)
         $worksheet.Name = 'CloudWatch Logs'
         $worksheet.Cells.Clear()
 
-        # シート全体の背景色を白色に設定します。
+        # Set the background color of the entire sheet to white.
         $worksheet.Cells.Interior.Color = 16777215
 
         $headerValues = New-Object 'object[,]' 1, $columns.Count
@@ -359,7 +359,7 @@ function Export-RowsToExcel {
                         continue
                     }
 
-                    # B列の@timestampをExcelの日付値として設定します。
+                    # Set column B (@timestamp) as an Excel date value.
                     if ($columnName -eq '@timestamp') {
                         $timestampText = [string]$property.Value
                         $timestampValue = [DateTimeOffset]::MinValue
@@ -372,12 +372,12 @@ function Export-RowsToExcel {
                                 [ref]$timestampValue
                             )
                         ) {
-                            # UTCなどのオフセット付き日時はローカル時刻に変換します。
+                            # Convert date/time values with an offset, such as UTC, to local time.
                             $dataValues[$r, $c] =
                                 $timestampValue.LocalDateTime.ToOADate()
                         }
                         else {
-                            # 解析できない場合は元の文字列をそのまま保存します。
+                            # If the value cannot be parsed, keep the original string.
                             $dataValues[$r, $c] = $timestampText
                         }
                     }
@@ -395,7 +395,7 @@ function Export-RowsToExcel {
             $dataRange.Value2 = $dataValues
             $dataRange.Interior.Color = 16777215
 
-            # B列の表示形式を yyyy/mm/dd hh:mm:ss に設定します。
+            # Set the display format of column B to yyyy/mm/dd hh:mm:ss.
             $timestampRange = $worksheet.Range(
                 $worksheet.Cells.Item(2, 2),
                 $worksheet.Cells.Item($Rows.Count + 1, 2)
@@ -408,20 +408,20 @@ function Export-RowsToExcel {
         $usedRange.Interior.Color = 16777215
         $usedRange.EntireColumn.AutoFit() | Out-Null
 
-        # @message列
+        # @message column
         $worksheet.Columns.Item(8).ColumnWidth = 100
         $worksheet.Columns.Item(8).WrapText = $true
 
-        # シートを表示し、先頭行を固定します。
+        # Show the sheet and freeze the first row.
         $worksheet.Activate()
         $excel.ActiveWindow.SplitRow = 1
         $excel.ActiveWindow.FreezePanes = $true
 
-        # Excelのグリッド線を非表示にします。
+        # Hide the Excel gridlines.
         $excel.ActiveWindow.DisplayGridlines = $false
 
-        # コピー済みテンプレートを上書き保存し、
-        # 秘密度ラベルを維持します。
+        # Save over the copied template
+        # and keep its sensitivity label.
         $workbook.Save()
     }
     finally {
@@ -453,20 +453,20 @@ function Export-RowsToExcel {
 }
 
 if (-not (Get-Command aws -ErrorAction SilentlyContinue)) {
-    throw 'AWS CLIが見つかりません。'
+    throw 'AWS CLI was not found.'
 }
 
 $start = Convert-ToJstDateTimeOffset $StartDateTime 'StartDateTime'
 $end = Convert-ToJstDateTimeOffset $EndDateTime 'EndDateTime'
 
 if ($end -le $start) {
-    throw 'EndDateTimeはStartDateTimeより後を指定してください。'
+    throw 'EndDateTime must be later than StartDateTime.'
 }
 
 $startEpoch = $start.ToUnixTimeSeconds()
 $endEpoch = $end.ToUnixTimeSeconds()
 
-# 定義順を保持しつつ、長いパターンから検索します。
+# Keep the original order, but search longer patterns first.
 $patternCandidates = @(
     for ($index = 0; $index -lt $ErrorPatterns.Count; $index++) {
         [pscustomobject]@{
@@ -496,7 +496,7 @@ $seenEventKeys = [System.Collections.Generic.HashSet[string]]::new([StringCompar
 foreach ($patternInfo in $sortedPatterns) {
     $pattern = [string]$patternInfo.Pattern
 
-    # / はLogs Insights正規表現の区切りなので、任意の1文字を表す . に置換します。
+    # / is the Logs Insights regular expression delimiter, so replace it with ., which matches any single character.
     $queryPattern = $pattern -replace '/', '.'
 
     $queryString = @"
@@ -519,7 +519,7 @@ fields @timestamp,
         ''
     ) | Add-Content -Path $queryPath -Encoding UTF8
 
-    Write-Host "検索中: $pattern" -ForegroundColor Cyan
+    Write-Host "Searching: $pattern" -ForegroundColor Cyan
 
     $patternResult = Invoke-CloudWatchPatternQuery `
         -Pattern $pattern `
@@ -549,10 +549,10 @@ fields @timestamp,
         BytesScanned   = $patternResult.BytesScanned
     })
 
-    Write-Host "  取得: $($patternResult.ReturnedCount)件 / 新規: ${uniqueAdded}件" -ForegroundColor DarkGray
+    Write-Host "  Retrieved: $($patternResult.ReturnedCount) results / New: ${uniqueAdded} results" -ForegroundColor DarkGray
 
     if ($patternResult.ReturnedCount -ge $QueryLimit) {
-        Write-Warning "Pattern '$pattern' の結果が上限 $QueryLimit 件に達しました。期間分割が必要な可能性があります。"
+        Write-Warning "Results for pattern '$pattern' reached the limit of $QueryLimit. You may need to split the time range."
     }
 }
 
@@ -577,11 +577,11 @@ if ($rows.Count -gt 0) {
         $excelCreated = $true
     }
     catch {
-        Write-Warning "Excelファイルを作成できませんでした。詳細: $($_.Exception.Message)"
+        Write-Warning "Could not create the Excel file. Details: $($_.Exception.Message)"
     }
 }
 
-Write-Host "完了: $($rows.Count)件 / $outputDirectory" -ForegroundColor Green
+Write-Host "Completed: $($rows.Count) results / $outputDirectory" -ForegroundColor Green
 Write-Host "Queries: $queryPath"
 Write-Host "JSON: $rowsJsonPath"
 Write-Host "Summary: $summaryPath"
@@ -590,5 +590,5 @@ if ($excelCreated) {
     Write-Host "Excel: $xlsxPath"
 }
 elseif ($rows.Count -eq 0) {
-    Write-Host '検索結果が0件のため、Excelファイルは作成していません。' -ForegroundColor Yellow
+    Write-Host 'No Excel file was created because the search returned 0 results.' -ForegroundColor Yellow
 }
