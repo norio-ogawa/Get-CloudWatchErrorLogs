@@ -14,12 +14,6 @@ Example:
 $AwsProfile = 'your-aws-profile'
 $AwsRegion = 'ap-northeast-1'
 $LogGroup = '/aws/containerinsights/your-eks-name/application'
-
-$ErrorPatterns = @(
-    'Exception',
-    'OOMKilled',
-    'SIGSEGV'
-)
 ```
 
 Set the values for your environment:
@@ -36,11 +30,35 @@ Make sure that `$LogGroup` points to the correct environment, such as DEV or PRO
 Before running the script:
 
 - AWS CLI must be installed.
-- AWS CLI authentication must be completed, and a valid access token must be available.
 - The AWS CLI profile must be configured.
+- AWS CLI authentication must be completed, and a valid access token must be available.
 - The AWS profile must have permission to read CloudWatch Logs.
 - Microsoft Excel must be installed.
 - `_template.xlsx` must be placed in the same directory as `Get-CloudWatchErrorLogs.ps1`.
+
+### AWS SSO authentication
+
+If you use AWS IAM Identity Center (SSO), configure your AWS CLI profile with:
+
+```powershell
+aws configure sso --no-browser
+```
+
+When prompted for the **SSO Start URL**, open the AWS access portal and click **Access keys** for the AWS account and role you want to use. You can find the SSO configuration information there.
+
+With `--no-browser`, the AWS CLI displays a URL for authentication. Open the URL in a browser and follow the instructions to complete authentication.
+
+After the profile is configured, sign in with:
+
+```powershell
+aws sso login --profile <your-aws-profile> --no-browser
+```
+
+Use the same profile name for `$AwsProfile` in `Get-CloudWatchErrorLogs.ps1`.
+
+### Excel template
+
+`_template.xlsx` must be in the same directory as the PowerShell script.
 
 Example:
 
