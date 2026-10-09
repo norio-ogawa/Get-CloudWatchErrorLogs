@@ -23,10 +23,11 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$AwsProfile = 'awsvsp-psd-basic-964988438754'
+$AwsProfile = 'awsvsp-psd-basic-999999999999'
 $AwsRegion = 'ap-northeast-1'
-$LogGroup = '/aws/containerinsights/tmr-dev-eks/application'
-$Namespace = 'tmrdev'
+$LogGroup = '/aws/containerinsights/tla-dev-eks/application'
+# Namespace is configured but is intentionally not used in the current search.
+$Namespace = 'tladev'
 $QueryLimit = 100000
 $PollSeconds = 2
 $TimeoutMinutes = 15
