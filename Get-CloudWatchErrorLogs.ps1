@@ -31,43 +31,163 @@ $QueryLimit = 100000
 $PollSeconds = 2
 $TimeoutMinutes = 15
 
-$ErrorPatterns = @(
-    'SIGSEGV',
-    'OutOfMemory',
-    'out of memory',
-    'Java heap space',
-    'panic:',
-    'JobExecutionException',
-    'unhandled Exception',
-    'SSL error',
-    'SAS/TK is aborting',
-    'OAuth token is expired',
-    'OOMKilling',
-    'Operation timed out',
-    'INTERNAL_SERVER_ERROR',
-    'I/O error on',
-    'ServletOutputStream failed to write:',
-    'Gateway Time-out',
-    'No space left',
-    'endpoints have no available addresses',
-    'Traceback',
-    'timed out after 60',
-    'DiskPressure',
-    'NodeHasDiskPressure',
-    'FreeDiskSpaceFailed',
-    'EvictionThresholdMet',
-    'ImageGCFailed',
-    'Insufficient ephemeral-storage',
-    'NodeHasMemoryPressure',
-    'OOMKilled',
-    'SystemOOM',
-    'NodeHasPIDPressure',
-    'FailedScheduling',
-    'NodeNotReady',
-    'NetworkUnavailable',
-    'PROCESS_EVENT_FAILED',
-    'Exception'
-)
+function Get-ErrorPatterns {
+
+    $defaultPatterns = @(
+        'SIGSEGV',
+        'OutOfMemory',
+        'out of memory',
+        'Java heap space',
+        'panic:',
+        'JobExecutionException',
+        'unhandled Exception',
+        'SSL error',
+        'SAS/TK is aborting',
+        'OAuth token is expired',
+        'OOMKilling',
+        'Operation timed out',
+        'INTERNAL_SERVER_ERROR',
+        'I/O error on',
+        'ServletOutputStream failed to write:',
+        'Gateway Time-out',
+        'No space left',
+        'endpoints have no available addresses',
+        'Traceback',
+        'timed out after 60',
+        'DiskPressure',
+        'NodeHasDiskPressure',
+        'FreeDiskSpaceFailed',
+        'EvictionThresholdMet',
+        'ImageGCFailed',
+        'Insufficient ephemeral-storage',
+        'NodeHasMemoryPressure',
+        'OOMKilled',
+        'SystemOOM',
+        'NodeHasPIDPressure',
+        'FailedScheduling',
+        'NodeNotReady',
+        'NetworkUnavailable',
+        'PROCESS_EVENT_FAILED',
+        'Exception'
+    )
+
+    $templateFile = Join-Path `
+        $PSScriptRoot `
+        '_template.xlsx'
+
+    if (-not (Test-Path -LiteralPath $templateFile)) {
+        Write-Warning (
+            "_template.xlsx was not found. " +
+            "Using built-in error patterns."
+        )
+
+        return $defaultPatterns
+    }
+
+    $excel = $null
+    $workbook = $null
+    $worksheet = $null
+
+    try {
+
+        $excel = New-Object -ComObject Excel.Application
+        $excel.Visible = $false
+        $excel.DisplayAlerts = $false
+
+        $workbook = $excel.Workbooks.Open(
+            [IO.Path]::GetFullPath($templateFile),
+            0,
+            $true
+        )
+
+        try {
+            $worksheet =
+                $workbook.Worksheets.Item('ErrorPatterns')
+        }
+        catch {
+
+            Write-Warning (
+                "Worksheet 'ErrorPatterns' was not found. " +
+                "Using built-in error patterns."
+            )
+
+            return $defaultPatterns
+        }
+
+        $patterns =
+            [System.Collections.Generic.List[string]]::new()
+
+        $row = 1
+
+        while ($true) {
+
+            $value =
+                [string]$worksheet.Cells.Item($row,1).Text
+
+            $value = $value.Trim()
+
+            if ([string]::IsNullOrWhiteSpace($value)) {
+                break
+            }
+
+            $patterns.Add($value)
+
+            $row++
+        }
+
+        if ($patterns.Count -eq 0) {
+
+            Write-Warning (
+                "No patterns were found in worksheet " +
+                "'ErrorPatterns'. Using built-in error patterns."
+            )
+
+            return $defaultPatterns
+        }
+
+        Write-Host (
+            "Loaded $($patterns.Count) error patterns " +
+            "from worksheet 'ErrorPatterns'."
+        )
+
+        return @($patterns.ToArray())
+    }
+    catch {
+
+        Write-Warning (
+            "Failed to read worksheet 'ErrorPatterns'. " +
+            "Using built-in error patterns. Details: " +
+            $_.Exception.Message
+        )
+
+        return $defaultPatterns
+    }
+    finally {
+
+        if ($workbook) {
+            $workbook.Close($false)
+        }
+
+        if ($excel) {
+            $excel.Quit()
+        }
+
+        foreach ($obj in @(
+            $worksheet,
+            $workbook,
+            $excel
+        )) {
+            if ($null -ne $obj) {
+                [void][Runtime.InteropServices.Marshal]::ReleaseComObject($obj)
+            }
+        }
+
+        [GC]::Collect()
+        [GC]::WaitForPendingFinalizers()
+    }
+}
+
+$ErrorPatterns = Get-ErrorPatterns
 
 function Convert-ToJstDateTimeOffset {
     param(
@@ -274,6 +394,164 @@ function Invoke-CloudWatchPatternQuery {
     }
 }
 
+function Add-PatternPivotSheet {
+    param(
+        $Workbook,
+        $SourceWorksheet,
+        [int]$LastRow
+    )
+
+    $pivotSheet = $null
+    $existingSheet = $null
+    $pivotCache = $null
+    $pivotTable = $null
+    $rowField = $null
+    $messageField = $null
+    $dataField = $null
+    $destinationRange = $null
+
+    try {
+        # Remove an existing Pivot sheet if it exists.
+        try {
+            $existingSheet = $Workbook.Worksheets.Item('Pivot')
+        }
+        catch {
+            $existingSheet = $null
+        }
+
+        if ($null -ne $existingSheet) {
+            $existingSheet.Delete()
+
+            [void][Runtime.InteropServices.Marshal]::ReleaseComObject(
+                $existingSheet
+            )
+            $existingSheet = $null
+        }
+
+        # Insert Pivot sheet immediately after
+        # the CloudWatch Logs sheet.
+        $pivotSheet = $Workbook.Worksheets.Add()
+        $pivotSheet.Name = 'Pivot'
+
+        # Build the source range in R1C1 format.
+        # The source worksheet contains eight columns from A through H.
+        $sourceSheetName = $SourceWorksheet.Name.Replace("'", "''")
+        $sourceData = "'$sourceSheetName'!R1C1:R${LastRow}C12"
+
+        # Create the PivotTable cache.
+        # 1 represents xlDatabase.
+        $pivotCache = $Workbook.PivotCaches().Create(
+            1,
+            $sourceData
+        )
+
+        # Create the PivotTable beginning at cell A3.
+        $destinationRange = $pivotSheet.Range('A3')
+
+        $pivotTable = $pivotCache.CreatePivotTable(
+            $destinationRange,
+            'ErrorPatternPivot'
+        )
+
+        # Add Pattern as the row field.
+        # 1 represents xlRowField.
+        $rowField = $pivotTable.PivotFields('Pattern')
+        $rowField.Orientation = 1
+        $rowField.Position = 1
+
+        # Count @message for each Pattern.
+        # -4112 represents xlCount.
+        $messageField = $pivotTable.PivotFields('@message')
+        $dataField = $pivotTable.AddDataField(
+            $messageField,
+            'Count of @message',
+            -4112
+        )
+
+        $dataField.NumberFormat = '#,##0'
+        
+        # Set the Pivot sheet appearance.
+        $pivotSheet.Cells.Interior.Color = 16777215
+        $pivotSheet.Cells.Font.Name = 'Calibri'
+
+        # Adjust the Pivot sheet layout.
+        $pivotSheet.Columns.AutoFit() | Out-Null
+        $pivotSheet.Activate()
+        $pivotSheet.Range('A3').Select() | Out-Null
+    }
+    finally {
+        foreach ($obj in @(
+            $dataField,
+            $messageField,
+            $rowField,
+            $pivotTable,
+            $destinationRange,
+            $pivotCache,
+            $pivotSheet,
+            $existingSheet
+        )) {
+            if ($null -ne $obj) {
+                [void][Runtime.InteropServices.Marshal]::ReleaseComObject(
+                    $obj
+                )
+            }
+        }
+    }
+}
+
+function Set-WorksheetOrder {
+    param(
+        $Workbook
+    )
+
+    $logSheet = $null
+    $pivotSheet = $null
+    $errorPatternSheet = $null
+
+    try {
+        $logSheet =
+            $Workbook.Worksheets.Item('CloudWatch Logs')
+
+        $pivotSheet =
+            $Workbook.Worksheets.Item('Pivot')
+
+        #
+        # Desired order:
+        #
+        # 1. CloudWatch Logs
+        # 2. Pivot
+        # 3. ErrorPatterns
+        #
+
+        #$logSheet.Move(
+        #    $Workbook.Worksheets.Item(1)
+        #)
+
+        #$pivotSheet.Move(
+        #    $null,
+        #    $logSheet
+        #)
+    }
+    catch {
+        Write-Warning (
+            "Failed to reorder worksheets. Details: " +
+            $_.Exception.Message
+        )
+    }
+    finally {
+        foreach ($obj in @(
+            $errorPatternSheet,
+            $pivotSheet,
+            $logSheet
+        )) {
+            if ($null -ne $obj) {
+                [void][Runtime.InteropServices.Marshal]::
+                    ReleaseComObject($obj)
+            }
+        }
+    }
+}
+
 function Export-RowsToExcel {
     param(
         [object[]]$Rows,
@@ -283,6 +561,10 @@ function Export-RowsToExcel {
     $columns = @(
         'Pattern',
         '@timestamp',
+        'year',
+        'month',
+        'day',
+        'hour',
         'kubernetes.pod_name',
         'kubernetes.container_name',
         'log_processed.level',
@@ -297,15 +579,25 @@ function Export-RowsToExcel {
         throw "_template.xlsx was not found: $templateFile"
     }
 
-    Copy-Item -LiteralPath $templateFile -Destination $Path -Force
+    Copy-Item `
+        -LiteralPath $templateFile `
+        -Destination $Path `
+        -Force
 
     $absolutePath = [IO.Path]::GetFullPath($Path)
+
     $excel = $null
     $workbook = $null
     $worksheet = $null
     $headerRange = $null
     $dataRange = $null
     $timestampRange = $null
+    $datePartRange = $null
+    $yearRange = $null
+    $monthRange = $null
+    $dayRange = $null
+    $hourRange = $null
+    $messageColumn = $null
     $usedRange = $null
 
     try {
@@ -320,16 +612,17 @@ function Export-RowsToExcel {
         )
 
         if ($workbook.ReadOnly) {
-            throw 'The copied template was opened as read-only.'
+            throw 'The template copy was opened as read-only.'
         }
 
         $worksheet = $workbook.Worksheets.Item(1)
         $worksheet.Name = 'CloudWatch Logs'
         $worksheet.Cells.Clear()
 
-        # Set the background color of the entire sheet to white.
+        # Set the worksheet background color to white.
         $worksheet.Cells.Interior.Color = 16777215
 
+        # Create the header row.
         $headerValues = New-Object 'object[,]' 1, $columns.Count
 
         for ($c = 0; $c -lt $columns.Count; $c++) {
@@ -344,84 +637,193 @@ function Export-RowsToExcel {
         $headerRange.Value2 = $headerValues
         $headerRange.Font.Bold = $true
         $headerRange.Interior.Color = 16777215
+
+        # Align the headers to the top-left.
+        # -4160 represents xlTop.
+        # -4131 represents xlLeft.
+        $headerRange.VerticalAlignment = -4160
+        $headerRange.HorizontalAlignment = -4131
+
         $headerRange.AutoFilter() | Out-Null
 
         if ($Rows.Count -gt 0) {
-            $dataValues = New-Object 'object[,]' $Rows.Count, $columns.Count
+            $dataValues = New-Object `
+                'object[,]' `
+                $Rows.Count, `
+                $columns.Count
 
             for ($r = 0; $r -lt $Rows.Count; $r++) {
                 for ($c = 0; $c -lt $columns.Count; $c++) {
                     $columnName = $columns[$c]
-                    $property = $Rows[$r].PSObject.Properties[$columnName]
 
-                    if ($null -eq $property -or $null -eq $property.Value) {
+                    # The date-part columns are populated with Excel formulas.
+                    if ($columnName -in @(
+                        'year',
+                        'month',
+                        'day',
+                        'hour'
+                    )) {
                         $dataValues[$r, $c] = ''
                         continue
                     }
 
-                    # Set column B (@timestamp) as an Excel date value.
+                    $property =
+                        $Rows[$r].PSObject.Properties[$columnName]
+
+                    if (
+                        $null -eq $property -or
+                        $null -eq $property.Value
+                    ) {
+                        $dataValues[$r, $c] = ''
+                        continue
+                    }
+
+                    # Store @timestamp as an Excel datetime value.
                     if ($columnName -eq '@timestamp') {
                         $timestampText = [string]$property.Value
                         $timestampValue = [DateTimeOffset]::MinValue
-
                         if (
                             [DateTimeOffset]::TryParse(
                                 $timestampText,
-                                [Globalization.CultureInfo]::InvariantCulture,
-                                [Globalization.DateTimeStyles]::AllowWhiteSpaces,
+                                [Globalization.CultureInfo]::
+                                    InvariantCulture,
+                                (
+                                    [Globalization.DateTimeStyles]::AllowWhiteSpaces -bor
+                                    [Globalization.DateTimeStyles]::AssumeUniversal
+                                ),
                                 [ref]$timestampValue
                             )
                         ) {
-                            # Convert date/time values with an offset, such as UTC, to local time.
+                            # Convert the UTC timestamp to the local time
+                            # of the computer running this script.
+                            $localTimestamp =
+                                $timestampValue.ToLocalTime()
+
                             $dataValues[$r, $c] =
-                                $timestampValue.LocalDateTime.ToOADate()
+                                $localTimestamp.DateTime.ToOADate()
                         }
                         else {
-                            # If the value cannot be parsed, keep the original string.
+                            # Keep the original value if parsing fails.
                             $dataValues[$r, $c] = $timestampText
                         }
                     }
                     else {
-                        $dataValues[$r, $c] = [string]$property.Value
+                        $dataValues[$r, $c] =
+                            [string]$property.Value
                     }
                 }
             }
 
+            $lastDataRow = $Rows.Count + 1
+
             $dataRange = $worksheet.Range(
                 $worksheet.Cells.Item(2, 1),
-                $worksheet.Cells.Item($Rows.Count + 1, $columns.Count)
+                $worksheet.Cells.Item(
+                    $lastDataRow,
+                    $columns.Count
+                )
             )
 
             $dataRange.Value2 = $dataValues
             $dataRange.Interior.Color = 16777215
 
-            # Set the display format of column B to yyyy/mm/dd hh:mm:ss.
+            # Align all log data to the top-left.
+            $dataRange.VerticalAlignment = -4160
+            $dataRange.HorizontalAlignment = -4131
+
+            # Format column B as yyyy/mm/dd hh:mm:ss.
             $timestampRange = $worksheet.Range(
                 $worksheet.Cells.Item(2, 2),
-                $worksheet.Cells.Item($Rows.Count + 1, 2)
+                $worksheet.Cells.Item($lastDataRow, 2)
             )
 
-            $timestampRange.NumberFormat = 'yyyy/mm/dd hh:mm:ss'
+            $timestampRange.NumberFormat =
+                'yyyy/mm/dd hh:mm:ss'
+
+            # Add formulas for year, month, day, and hour.
+            # FormulaR1C1 allows all rows to be updated at once.
+            $yearRange = $worksheet.Range(
+                $worksheet.Cells.Item(2, 3),
+                $worksheet.Cells.Item($lastDataRow, 3)
+            )
+
+            $monthRange = $worksheet.Range(
+                $worksheet.Cells.Item(2, 4),
+                $worksheet.Cells.Item($lastDataRow, 4)
+            )
+
+            $dayRange = $worksheet.Range(
+                $worksheet.Cells.Item(2, 5),
+                $worksheet.Cells.Item($lastDataRow, 5)
+            )
+
+            $hourRange = $worksheet.Range(
+                $worksheet.Cells.Item(2, 6),
+                $worksheet.Cells.Item($lastDataRow, 6)
+            )
+
+            # Each formula references @timestamp in column B.
+            $yearRange.FormulaR1C1 = '=YEAR(RC[-1])'
+            $monthRange.FormulaR1C1 = '=MONTH(RC[-2])'
+            $dayRange.FormulaR1C1 = '=DAY(RC[-3])'
+            $hourRange.FormulaR1C1 = '=HOUR(RC[-4])'
+
+            # Format year, month, day, and hour as numbers.
+            $datePartRange = $worksheet.Range(
+                $worksheet.Cells.Item(2, 3),
+                $worksheet.Cells.Item($lastDataRow, 6)
+            )
+
+            $datePartRange.NumberFormat = '0'
         }
 
         $usedRange = $worksheet.UsedRange
         $usedRange.Interior.Color = 16777215
+
+        # Align the entire used range to the top-left.
+        $usedRange.VerticalAlignment = -4160
+        $usedRange.HorizontalAlignment = -4131
+
         $usedRange.EntireColumn.AutoFit() | Out-Null
 
-        # @message column
-        $worksheet.Columns.Item(8).ColumnWidth = 100
-        $worksheet.Columns.Item(8).WrapText = $true
+        # Configure the @message column.
+        # @message is now column L because four columns were added.
+        $messageColumn = $worksheet.Columns.Item(12)
+        $messageColumn.ColumnWidth = 100
+        $messageColumn.WrapText = $true
 
-        # Show the sheet and freeze the first row.
+        # Freeze the header row.
         $worksheet.Activate()
         $excel.ActiveWindow.SplitRow = 1
         $excel.ActiveWindow.FreezePanes = $true
 
-        # Hide the Excel gridlines.
+        # Hide Excel gridlines.
         $excel.ActiveWindow.DisplayGridlines = $false
 
-        # Save over the copied template
-        # and keep its sensitivity label.
+        # Add the Pivot sheet.
+        if ($Rows.Count -gt 0) {
+            Add-PatternPivotSheet `
+                -Workbook $workbook `
+                -SourceWorksheet $worksheet `
+                -LastRow ($Rows.Count + 1)
+
+            # Add the executed command to the Pivot sheet.
+            $pivotWorksheet = $workbook.Worksheets.Item('Pivot')
+
+            $commandText = ".\Get-CloudWatchErrorLogs.ps1 " +
+                "-StartDateTime `"$StartDateTime`" " +
+                "-EndDateTime `"$EndDateTime`""
+
+            $pivotWorksheet.Cells.Item(1, 1).Value2 = $commandText
+
+            [void][Runtime.InteropServices.Marshal]::
+                ReleaseComObject($pivotWorksheet)
+        }
+
+        # Change the order of the sheets
+        Set-WorksheetOrder -Workbook $workbook
+
+        # Save the copied template and keep the sensitivity label.
         $workbook.Save()
     }
     finally {
@@ -435,6 +837,12 @@ function Export-RowsToExcel {
 
         foreach ($obj in @(
             $usedRange,
+            $messageColumn,
+            $hourRange,
+            $dayRange,
+            $monthRange,
+            $yearRange,
+            $datePartRange,
             $timestampRange,
             $dataRange,
             $headerRange,
@@ -443,7 +851,8 @@ function Export-RowsToExcel {
             $excel
         )) {
             if ($null -ne $obj) {
-                [void][Runtime.InteropServices.Marshal]::ReleaseComObject($obj)
+                [void][Runtime.InteropServices.Marshal]::
+                    ReleaseComObject($obj)
             }
         }
 
